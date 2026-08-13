@@ -1,8 +1,9 @@
 package com.callwhisper.call_whisper
 
+import android.content.Context
+import android.util.Log
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
-import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 
 /**
@@ -25,10 +26,9 @@ class WhisperEngine(private val context: Context, private val progress: (Double,
             try {
                 val durationMs = PcmDecoder.durationMs(audioPath)
                 Log.i("CallWhisper", "transcription start: duration=${durationMs}ms, source=$audioPath")
-                // Never load a long recording into memory as one PCM array.
-                // Short chunks provide responsive, visible whole-recording progress
-                // while also keeping Kotlin + JNI + Whisper peak memory low.
-                val chunkMs = 20_000L
+                // Keep native/JNI allocation bounded while retaining the requested
+                // 90-second processing units.
+                val chunkMs = 90_000L
                 val segments = mutableListOf<NativeSegment>()
                 var startMs = 0L
                 while (startMs < durationMs) {
@@ -91,5 +91,3 @@ object PcmDecoder {
         return AndroidAudioDecoder.decodeToMono16k(path, startUs, endUs, report)
     }
 }
-import android.content.Context
-import android.util.Log
