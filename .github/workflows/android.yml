@@ -35,7 +35,11 @@ jobs:
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' android/app/build.gradle.kts
 
       - name: Resolve Flutter packages
-        run: flutter pub get
+        run: |
+          flutter pub get
+          # file_picker 8.x fixes its Android library compile SDK at 34.
+          # Its transitive lifecycle dependency now requires API 36.
+          find "$PUB_CACHE/hosted" -path '*/file_picker-*/android/build.gradle' -exec sed -i 's/compileSdkVersion 34/compileSdkVersion 36/' {} \;
 
       - name: Fetch whisper.cpp native source
         run: bash scripts/bootstrap_native.sh
