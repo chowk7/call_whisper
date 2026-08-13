@@ -25,10 +25,12 @@ jobs:
       - name: Generate Android platform project
         run: |
           mkdir -p /tmp/call-whisper-native
+          cp android/app/src/main/AndroidManifest.xml /tmp/call-whisper-native/AndroidManifest.xml
           cp -R android/app/src/main/cpp /tmp/call-whisper-native/
           cp -R android/app/src/main/kotlin /tmp/call-whisper-native/
           flutter create --platforms=android --project-name=call_whisper --org=com.callwhisper .
           rm -rf android/app/src/main/cpp android/app/src/main/kotlin
+          cp /tmp/call-whisper-native/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
           cp -R /tmp/call-whisper-native/cpp android/app/src/main/
           cp -R /tmp/call-whisper-native/kotlin android/app/src/main/
           # file_picker's current Android dependency requires API 36.

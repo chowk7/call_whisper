@@ -29,6 +29,7 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
   bool _cancelRequested = false;
   List<TranscriptSegment> _segments = [];
   final Map<String, String> _speakerNames = {};
+  final List<String> _logs = [];
 
   @override
   void initState() { super.initState(); _models.load().then((_) { if (mounted) setState(() {}); }); }
@@ -38,7 +39,7 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
   Future<void> _chooseFile() async {
     final selected = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: const ['m4a', 'mp3', 'wav', 'aac']);
     final filePath = selected?.files.single.path;
-    if (filePath != null) setState(() { _audio = File(filePath); _segments = []; _speakerNames.clear(); _status = '파일 선택 완료'; });
+    if (filePath != null) setState(() { _audio = File(filePath); _segments = []; _speakerNames.clear(); _logs.clear(); _status = '파일 선택 완료'; });
   }
 
   Future<void> _run() async {
@@ -47,10 +48,17 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
     if (model == null) return _notice('모델 설정에서 Whisper 모델을 설치하고 선택해 주세요.');
     final modelFile = await _models.installedFile(model);
     if (modelFile == null) return _notice('선택한 모델을 다시 설치해 주세요.');
-    setState(() { _running = true; _cancelRequested = false; _progress = 0; _status = '전체 녹음 중 0% 처리'; });
+    setState(() { _running = true; _cancelRequested = false; _progress = 0; _logs.clear(); _status = '전체 녹음 중 0% 처리'; });
     _progressSubscription?.cancel();
     _progressSubscription = _transcriber.progress.listen((update) {
-      if (mounted) setState(() { _progress = update.fraction; _status = update.message; });
+      if (mounted) setState(() {
+        _progress = update.fraction;
+        _status = update.message;
+        if (_logs.isEmpty || _logs.last != update.message) {
+          _logs.add('${DateTime.now().toIso8601String().substring(11, 19)}  ${update.message}');
+          if (_logs.length > 80) _logs.removeAt(0);
+        }
+      });
     });
     try {
       final result = await _transcriber.transcribe(audioFile: _audio!, modelFile: modelFile, diarize: true);
@@ -62,8 +70,9 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
             : '${result.length}개 발화 구간 완료';
       });
     } on PlatformException catch (error) {
+      if (mounted) setState(() => _logs.add('오류: ${error.code} ${error.message ?? ''}'));
       _notice(error.message ?? '전사 엔진 오류');
-    } catch (error) { _notice('$error'); }
+    } catch (error) { if (mounted) setState(() => _logs.add('오류: $error')); _notice('$error'); }
     finally { if (mounted) setState(() => _running = false); }
   }
 
@@ -116,6 +125,11 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
       Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(_status)),
       FilledButton.icon(onPressed: _running ? _cancel : _run, icon: Icon(_running ? Icons.stop : Icons.play_arrow), label: Text(_running ? '전사 취소' : '전사 시작')),
       const SizedBox(height: 16),
+      if (_logs.isNotEmpty) ExpansionTile(
+        leading: const Icon(Icons.article_outlined),
+        title: const Text('처리 로그'),
+        children: [Padding(padding: const EdgeInsets.all(12), child: SelectableText(_logs.join('\n'), style: const TextStyle(fontFamily: 'monospace', fontSize: 12)))],
+      ),
       if (_segments.isNotEmpty) ...[
         const Text('화자 이름', style: TextStyle(fontWeight: FontWeight.bold)),
         Wrap(spacing: 8, children: _speakerNames.keys.map((id) => ActionChip(label: Text('$id: ${_speakerNames[id]}'), onPressed: () => _renameSpeaker(id))).toList()),

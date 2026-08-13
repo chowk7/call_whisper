@@ -8,7 +8,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val methods = "com.callwhisper/transcription"
     private val events = "com.callwhisper/transcription-progress"
-    private val engine by lazy { WhisperEngine(this::emitProgress) }
+    private val engine by lazy { WhisperEngine(applicationContext, this::emitProgress) }
     private var sink: EventChannel.EventSink? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

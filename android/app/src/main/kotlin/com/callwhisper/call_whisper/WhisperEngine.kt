@@ -10,7 +10,7 @@ import java.util.concurrent.Executors
  * whisper.cpp wrapper. The wrapper produces timestamped speech segments and
  * speaker embeddings; clustering is completely device-local.
  */
-class WhisperEngine(private val progress: (Double, String) -> Unit) {
+class WhisperEngine(private val context: Context, private val progress: (Double, String) -> Unit) {
     private val worker = Executors.newSingleThreadExecutor()
     @Volatile private var cancelled = false
 
@@ -20,9 +20,11 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
             return
         }
         cancelled = false
+        TranscriptionForegroundService.start(context)
         worker.execute {
             try {
                 val durationMs = PcmDecoder.durationMs(audioPath)
+                Log.i("CallWhisper", "transcription start: duration=${durationMs}ms, source=$audioPath")
                 // Never load a long recording into memory as one PCM array.
                 // Short chunks provide responsive, visible whole-recording progress
                 // while also keeping Kotlin + JNI + Whisper peak memory low.
@@ -31,10 +33,12 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
                 var startMs = 0L
                 while (startMs < durationMs) {
                     val endMs = minOf(startMs + chunkMs, durationMs)
+                    Log.i("CallWhisper", "chunk start: ${startMs}ms-${endMs}ms")
                     progress(startMs.toDouble() / durationMs, "전체 녹음 중 ${percent(startMs, durationMs)}% 처리")
                     val pcm = PcmDecoder.decodeMono16k(audioPath, startMs * 1000, endMs * 1000) { decoded ->
                         val overall = (startMs + (endMs - startMs) * decoded) / durationMs
                         progress(overall, "전체 녹음 중 ${percent(overall)}% 준비 중")
+                        TranscriptionForegroundService.update(context, "전체 녹음 ${percent(overall)}% 준비 중")
                     }
                     if (cancelled) break
                     progress(startMs.toDouble() / durationMs, "전체 녹음 중 ${percent(startMs, durationMs)}% 전사 중")
@@ -42,6 +46,7 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
                         segments += NativeWhisper.transcribe(modelPath, pcm, "ko", diarize) { chunkProgress ->
                             val overall = (startMs + (endMs - startMs) * chunkProgress) / durationMs
                             progress(overall, "전체 녹음 중 ${percent(overall)}% 전사 중")
+                            TranscriptionForegroundService.update(context, "전체 녹음 ${percent(overall)}% 전사 중")
                         }.map {
                             it.copy(startMs = it.startMs + startMs.toInt(), endMs = it.endMs + startMs.toInt())
                         }
@@ -50,13 +55,17 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
                         if (!cancelled) throw e
                     }
                     if (cancelled) break
+                    Log.i("CallWhisper", "chunk complete: ${segments.size} segments")
                     startMs = endMs
                 }
                 val completed = if (cancelled) startMs else durationMs
                 progress(completed.toDouble() / durationMs, if (cancelled) "중지됨 — 완료 구간 결과 저장" else "완료")
                 result.success(segments.map { mapOf("startMs" to it.startMs, "endMs" to it.endMs, "speakerId" to it.speakerId, "text" to it.text) })
             } catch (e: Throwable) {
+                Log.e("CallWhisper", "transcription failed", e)
                 result.error("transcription_failed", e.message ?: "로컬 전사를 완료하지 못했습니다.", null)
+            } finally {
+                TranscriptionForegroundService.stop(context)
             }
         }
     }
@@ -82,3 +91,5 @@ object PcmDecoder {
         return AndroidAudioDecoder.decodeToMono16k(path, startUs, endUs, report)
     }
 }
+import android.content.Context
+import android.util.Log
