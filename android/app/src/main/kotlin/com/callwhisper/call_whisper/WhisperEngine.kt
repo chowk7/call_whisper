@@ -30,21 +30,26 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
                 var startMs = 0L
                 while (startMs < durationMs) {
                     val endMs = minOf(startMs + chunkMs, durationMs)
-                    progress(startMs.toDouble() / durationMs * 0.8, "오디오 준비 중 (${startMs / 60000 + 1}분 구간)")
+                    progress(startMs.toDouble() / durationMs, "전체 녹음 중 ${percent(startMs, durationMs)}% 처리")
                     val pcm = PcmDecoder.decodeMono16k(audioPath, startMs * 1000, endMs * 1000) { decoded ->
                         val overall = (startMs + (endMs - startMs) * decoded) / durationMs
-                        progress(overall * 0.8, "오디오 준비 중")
+                        progress(overall, "전체 녹음 중 ${percent(overall)}% 준비 중")
                     }
-                    if (cancelled) return@execute result.error("cancelled", "사용자가 전사를 취소했습니다.", null)
-                    progress(0.8 + startMs.toDouble() / durationMs * 0.18, "Whisper 전사 중")
-                    segments += NativeWhisper.transcribe(modelPath, pcm, "ko", diarize).map {
-                        it.copy(startMs = it.startMs + startMs.toInt(), endMs = it.endMs + startMs.toInt())
+                    if (cancelled) break
+                    progress(startMs.toDouble() / durationMs, "전체 녹음 중 ${percent(startMs, durationMs)}% 전사 중")
+                    try {
+                        segments += NativeWhisper.transcribe(modelPath, pcm, "ko", diarize).map {
+                            it.copy(startMs = it.startMs + startMs.toInt(), endMs = it.endMs + startMs.toInt())
+                        }
+                    } catch (e: Throwable) {
+                        // Keep all fully processed chunks when the user stops.
+                        if (!cancelled) throw e
                     }
+                    if (cancelled) break
                     startMs = endMs
                 }
-                if (cancelled) return@execute result.error("cancelled", "사용자가 전사를 취소했습니다.", null)
-                progress(0.90, if (diarize) "발화자 구분 완료" else "전사 결과 정리 중")
-                progress(1.0, "완료")
+                val completed = if (cancelled) startMs else durationMs
+                progress(completed.toDouble() / durationMs, if (cancelled) "중지됨 — 완료 구간 결과 저장" else "완료")
                 result.success(segments.map { mapOf("startMs" to it.startMs, "endMs" to it.endMs, "speakerId" to it.speakerId, "text" to it.text) })
             } catch (e: Throwable) {
                 result.error("transcription_failed", e.message ?: "로컬 전사를 완료하지 못했습니다.", null)
@@ -53,6 +58,9 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
     }
 
     fun cancel() { cancelled = true; NativeWhisper.cancel() }
+
+    private fun percent(part: Long, total: Long): Int = (part * 100 / total.coerceAtLeast(1)).toInt().coerceIn(0, 100)
+    private fun percent(value: Double): Int = (value * 100).toInt().coerceIn(0, 100)
 }
 
 data class NativeSegment(val startMs: Int, val endMs: Int, val speakerId: String, val text: String)

@@ -26,6 +26,7 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
   double _progress = 0;
   String _status = '녹음 파일을 선택해 주세요.';
   bool _running = false;
+  bool _cancelRequested = false;
   List<TranscriptSegment> _segments = [];
   final Map<String, String> _speakerNames = {};
 
@@ -46,7 +47,7 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
     if (model == null) return _notice('모델 설정에서 Whisper 모델을 설치하고 선택해 주세요.');
     final modelFile = await _models.installedFile(model);
     if (modelFile == null) return _notice('선택한 모델을 다시 설치해 주세요.');
-    setState(() { _running = true; _progress = 0; _status = '파일 준비 중'; });
+    setState(() { _running = true; _cancelRequested = false; _progress = 0; _status = '전체 녹음 중 0% 처리'; });
     _progressSubscription?.cancel();
     _progressSubscription = _transcriber.progress.listen((update) {
       if (mounted) setState(() { _progress = update.fraction; _status = update.message; });
@@ -56,7 +57,9 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
       if (mounted) setState(() {
         _segments = result;
         for (final speaker in result.map((item) => item.speakerId).toSet()) { _speakerNames.putIfAbsent(speaker, () => speaker); }
-        _status = '${result.length}개 발화 구간 완료';
+        _status = _cancelRequested
+            ? '중지됨 — ${result.length}개 발화 구간 결과 저장'
+            : '${result.length}개 발화 구간 완료';
       });
     } on PlatformException catch (error) {
       _notice(error.message ?? '전사 엔진 오류');
@@ -64,7 +67,10 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
     finally { if (mounted) setState(() => _running = false); }
   }
 
-  Future<void> _cancel() async { await _transcriber.cancel(); setState(() => _status = '취소 요청 중'); }
+  Future<void> _cancel() async {
+    setState(() { _cancelRequested = true; _status = '중지 요청 중 — 완료 구간을 저장합니다.'; });
+    await _transcriber.cancel();
+  }
   void _notice(String text) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text))); }
 
   Future<void> _editSegment(int index) async {
@@ -102,7 +108,11 @@ class _TranscriptionPageState extends State<TranscriptionPage> {
     body: ListView(padding: const EdgeInsets.all(16), children: [
       Card(child: ListTile(leading: const Icon(Icons.audio_file), title: Text(_audio?.path.split('/').last ?? '선택된 파일 없음'), subtitle: const Text('m4a · mp3 · wav · aac'), trailing: TextButton(onPressed: _running ? null : _chooseFile, child: const Text('선택')))),
       const SizedBox(height: 12),
-      if (_running) LinearProgressIndicator(value: _progress),
+      if (_running) ...[
+        LinearProgressIndicator(value: _progress),
+        const SizedBox(height: 6),
+        Text('전체 녹음 중 ${(_progress * 100).toStringAsFixed(0)}% 처리', style: Theme.of(context).textTheme.labelLarge),
+      ],
       Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(_status)),
       FilledButton.icon(onPressed: _running ? _cancel : _run, icon: Icon(_running ? Icons.stop : Icons.play_arrow), label: Text(_running ? '전사 취소' : '전사 시작')),
       const SizedBox(height: 16),
