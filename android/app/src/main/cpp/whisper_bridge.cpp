@@ -24,11 +24,28 @@ jobject make_segment(JNIEnv * env, int start_ms, int end_ms, const char * speake
 }
 
 bool should_abort(void *) { return g_cancelled.load(); }
+
+struct progress_data {
+  JNIEnv * env;
+  jobject callback;
+  jmethodID invoke;
+};
+
+void report_progress(whisper_context *, whisper_state *, int progress, void * user_data) {
+  auto * data = static_cast<progress_data *>(user_data);
+  jclass double_class = data->env->FindClass("java/lang/Double");
+  jmethodID value_of = data->env->GetStaticMethodID(double_class, "valueOf", "(D)Ljava/lang/Double;");
+  jobject fraction = data->env->CallStaticObjectMethod(double_class, value_of, progress / 100.0);
+  jobject ignored = data->env->CallObjectMethod(data->callback, data->invoke, fraction);
+  if (ignored != nullptr) data->env->DeleteLocalRef(ignored);
+  data->env->DeleteLocalRef(fraction);
+  data->env->DeleteLocalRef(double_class);
+}
 }
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_callwhisper_call_1whisper_NativeWhisper_transcribe(
-    JNIEnv * env, jobject, jstring model_path, jshortArray pcm, jstring language, jboolean diarize) {
+    JNIEnv * env, jobject, jstring model_path, jshortArray pcm, jstring language, jboolean diarize, jobject on_progress) {
   const char * model = env->GetStringUTFChars(model_path, nullptr);
   const char * lang = env->GetStringUTFChars(language, nullptr);
   const jsize samples_count = env->GetArrayLength(pcm);
@@ -55,7 +72,13 @@ Java_com_callwhisper_call_1whisper_NativeWhisper_transcribe(
   // alternated only at detected turns; users can rename/edit labels in the UI.
   params.tdrz_enable = diarize == JNI_TRUE;
   params.abort_callback = should_abort;
+  progress_data progress_callback { env, on_progress, nullptr };
+  jclass function_class = env->GetObjectClass(on_progress);
+  progress_callback.invoke = env->GetMethodID(function_class, "invoke", "(Ljava/lang/Object;)Ljava/lang/Object;");
+  params.progress_callback = report_progress;
+  params.progress_callback_user_data = &progress_callback;
   if (whisper_full(context, params, audio.data(), static_cast<int>(audio.size())) != 0 || g_cancelled.load()) {
+    env->DeleteLocalRef(function_class);
     whisper_free(context);
     throw_java(env, g_cancelled.load() ? "전사가 취소되었습니다." : "Whisper 전사에 실패했습니다.");
     return nullptr;
@@ -76,6 +99,7 @@ Java_com_callwhisper_call_1whisper_NativeWhisper_transcribe(
     if (diarize == JNI_TRUE && whisper_full_get_segment_speaker_turn_next(context, i)) speaker = speaker == 1 ? 2 : 1;
   }
   whisper_free(context);
+  env->DeleteLocalRef(function_class);
   return output;
 }
 

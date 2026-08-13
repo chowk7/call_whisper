@@ -24,8 +24,9 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
             try {
                 val durationMs = PcmDecoder.durationMs(audioPath)
                 // Never load a long recording into memory as one PCM array.
-                // 90 seconds keeps the Kotlin + JNI + Whisper peak allocation low.
-                val chunkMs = 90_000L
+                // Short chunks provide responsive, visible whole-recording progress
+                // while also keeping Kotlin + JNI + Whisper peak memory low.
+                val chunkMs = 20_000L
                 val segments = mutableListOf<NativeSegment>()
                 var startMs = 0L
                 while (startMs < durationMs) {
@@ -38,7 +39,10 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
                     if (cancelled) break
                     progress(startMs.toDouble() / durationMs, "전체 녹음 중 ${percent(startMs, durationMs)}% 전사 중")
                     try {
-                        segments += NativeWhisper.transcribe(modelPath, pcm, "ko", diarize).map {
+                        segments += NativeWhisper.transcribe(modelPath, pcm, "ko", diarize) { chunkProgress ->
+                            val overall = (startMs + (endMs - startMs) * chunkProgress) / durationMs
+                            progress(overall, "전체 녹음 중 ${percent(overall)}% 전사 중")
+                        }.map {
                             it.copy(startMs = it.startMs + startMs.toInt(), endMs = it.endMs + startMs.toInt())
                         }
                     } catch (e: Throwable) {
@@ -67,7 +71,7 @@ data class NativeSegment(val startMs: Int, val endMs: Int, val speakerId: String
 
 object NativeWhisper {
     init { System.loadLibrary("call_whisper") }
-    external fun transcribe(modelPath: String, pcm16k: ShortArray, language: String, diarize: Boolean): List<NativeSegment>
+    external fun transcribe(modelPath: String, pcm16k: ShortArray, language: String, diarize: Boolean, onProgress: (Double) -> Unit): List<NativeSegment>
     external fun cancel()
 }
 
