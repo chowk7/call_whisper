@@ -38,7 +38,7 @@ jobs:
         run: flutter pub get
 
       - name: Fetch whisper.cpp native source
-        run: scripts/bootstrap_native.sh
+        run: bash scripts/bootstrap_native.sh
 
       - name: Build debug APK
         run: flutter build apk --debug
