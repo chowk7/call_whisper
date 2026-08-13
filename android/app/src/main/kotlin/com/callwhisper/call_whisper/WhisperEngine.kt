@@ -22,11 +22,26 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
         cancelled = false
         worker.execute {
             try {
-                progress(0.02, "m4a 오디오 디코딩 중")
-                val pcm = PcmDecoder.decodeMono16k(audioPath) { decoded -> progress(0.05 + decoded * 0.15, "오디오 준비 중") }
-                if (cancelled) return@execute result.error("cancelled", "사용자가 전사를 취소했습니다.", null)
-                progress(0.22, "Whisper 전사 중")
-                val segments = NativeWhisper.transcribe(modelPath, pcm, "ko", diarize)
+                val durationMs = PcmDecoder.durationMs(audioPath)
+                // Never load a long recording into memory as one PCM array.
+                // 90 seconds keeps the Kotlin + JNI + Whisper peak allocation low.
+                val chunkMs = 90_000L
+                val segments = mutableListOf<NativeSegment>()
+                var startMs = 0L
+                while (startMs < durationMs) {
+                    val endMs = minOf(startMs + chunkMs, durationMs)
+                    progress(startMs.toDouble() / durationMs * 0.8, "오디오 준비 중 (${startMs / 60000 + 1}분 구간)")
+                    val pcm = PcmDecoder.decodeMono16k(audioPath, startMs * 1000, endMs * 1000) { decoded ->
+                        val overall = (startMs + (endMs - startMs) * decoded) / durationMs
+                        progress(overall * 0.8, "오디오 준비 중")
+                    }
+                    if (cancelled) return@execute result.error("cancelled", "사용자가 전사를 취소했습니다.", null)
+                    progress(0.8 + startMs.toDouble() / durationMs * 0.18, "Whisper 전사 중")
+                    segments += NativeWhisper.transcribe(modelPath, pcm, "ko", diarize).map {
+                        it.copy(startMs = it.startMs + startMs.toInt(), endMs = it.endMs + startMs.toInt())
+                    }
+                    startMs = endMs
+                }
                 if (cancelled) return@execute result.error("cancelled", "사용자가 전사를 취소했습니다.", null)
                 progress(0.90, if (diarize) "발화자 구분 완료" else "전사 결과 정리 중")
                 progress(1.0, "완료")
@@ -50,7 +65,8 @@ object NativeWhisper {
 
 object PcmDecoder {
     /** Android MediaCodec handles m4a/aac, mp3 and wav without any cloud API. */
-    fun decodeMono16k(path: String, report: (Double) -> Unit): ShortArray {
-        return AndroidAudioDecoder.decodeToMono16k(path, report)
+    fun durationMs(path: String): Long = AndroidAudioDecoder.durationMs(path)
+    fun decodeMono16k(path: String, startUs: Long, endUs: Long, report: (Double) -> Unit): ShortArray {
+        return AndroidAudioDecoder.decodeToMono16k(path, startUs, endUs, report)
     }
 }

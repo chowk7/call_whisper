@@ -3,18 +3,29 @@ package com.callwhisper.call_whisper
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import java.nio.ByteBuffer
 import kotlin.math.roundToInt
 
 /** Device codec decoder for m4a/AAC. Produces signed mono 16 kHz PCM for Whisper. */
 object AndroidAudioDecoder {
-    fun decodeToMono16k(source: String, report: (Double) -> Unit): ShortArray {
+    fun durationMs(source: String): Long {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(source)
+            val track = (0 until extractor.trackCount).firstOrNull { index ->
+                extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+            } ?: throw IllegalArgumentException("오디오 트랙을 찾을 수 없습니다.")
+            return extractor.getTrackFormat(track).getLong(MediaFormat.KEY_DURATION) / 1000
+        } finally { extractor.release() }
+    }
+
+    fun decodeToMono16k(source: String, startUs: Long, endUs: Long, report: (Double) -> Unit): ShortArray {
         val extractor = MediaExtractor()
         extractor.setDataSource(source)
         val track = (0 until extractor.trackCount).firstOrNull { index ->
             extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
         } ?: throw IllegalArgumentException("오디오 트랙을 찾을 수 없습니다.")
         extractor.selectTrack(track)
+        extractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
         val format = extractor.getTrackFormat(track)
         val mime = format.getString(MediaFormat.KEY_MIME) ?: throw IllegalArgumentException("오디오 형식을 읽을 수 없습니다.")
         val codec = MediaCodec.createDecoderByType(mime)
@@ -22,8 +33,8 @@ object AndroidAudioDecoder {
         codec.start()
         val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
         val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-        val duration = format.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(1L)
-        val pcm = ArrayList<Short>()
+        val chunkDuration = (endUs - startUs).coerceAtLeast(1L)
+        val pcm = ShortAccumulator()
         val info = MediaCodec.BufferInfo()
         var inputDone = false
         var outputDone = false
@@ -34,7 +45,7 @@ object AndroidAudioDecoder {
                     if (index >= 0) {
                         val buffer = codec.getInputBuffer(index)!!
                         val size = extractor.readSampleData(buffer, 0)
-                        if (size < 0) { codec.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM); inputDone = true }
+                        if (size < 0 || extractor.sampleTime >= endUs) { codec.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM); inputDone = true }
                         else { codec.queueInputBuffer(index, 0, size, extractor.sampleTime, 0); extractor.advance() }
                     }
                 }
@@ -46,16 +57,16 @@ object AndroidAudioDecoder {
                         while (buffer.remaining() >= channels * 2) {
                             var mixed = 0
                             repeat(channels) { mixed += buffer.short.toInt() }
-                            pcm += (mixed / channels).toShort()
+                            pcm.add((mixed / channels).toShort())
                         }
                         codec.releaseOutputBuffer(index, false)
-                        report((info.presentationTimeUs * 1000.0 / duration).coerceIn(0.0, 1.0))
+                        report(((info.presentationTimeUs - startUs).toDouble() / chunkDuration).coerceIn(0.0, 1.0))
                         outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     }
                 }
             }
         } finally { codec.stop(); codec.release(); extractor.release() }
-        return resample(pcm.toShortArray(), sampleRate, 16_000)
+        return resample(pcm.toArray(), sampleRate, 16_000)
     }
 
     private fun resample(input: ShortArray, from: Int, to: Int): ShortArray {
@@ -69,4 +80,15 @@ object AndroidAudioDecoder {
         }
         return output
     }
+}
+
+/** Avoid ArrayList<Short> boxing, which causes long recordings to exhaust heap. */
+private class ShortAccumulator {
+    private var data = ShortArray(32_768)
+    private var size = 0
+    fun add(value: Short) {
+        if (size == data.size) data = data.copyOf(data.size * 2)
+        data[size++] = value
+    }
+    fun toArray(): ShortArray = data.copyOf(size)
 }
