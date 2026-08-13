@@ -1,0 +1,8 @@
+.dart_tool/
+.idea/
+.metadata
+.packages
+build/
+third_party/whisper.cpp/
+android/.gradle/
+android/local.properties

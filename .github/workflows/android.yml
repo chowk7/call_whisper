@@ -1,0 +1,44 @@
+name: Android debug build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # The original repository was empty. Generate Flutter's standard Android
+      # Gradle wrapper in CI, then put our native implementation back in place.
+      # Once Flutter is available locally, these generated platform files can be
+      # committed and this bootstrap step removed.
+      - name: Generate Android platform project
+        run: |
+          mkdir -p /tmp/call-whisper-native
+          cp -R android/app/src/main /tmp/call-whisper-native/
+          flutter create --platforms=android --project-name=call_whisper --org=com.callwhisper .
+          rm -rf android/app/src/main
+          cp -R /tmp/call-whisper-native/main android/app/src/
+
+      - name: Resolve Flutter packages
+        run: flutter pub get
+
+      - name: Build debug APK
+        run: flutter build apk --debug
+
+      - name: Publish APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: call-whisper-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
