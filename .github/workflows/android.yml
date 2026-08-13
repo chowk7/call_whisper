@@ -33,6 +33,19 @@ jobs:
           cp -R /tmp/call-whisper-native/kotlin android/app/src/main/
           # file_picker's current Android dependency requires API 36.
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' android/app/build.gradle.kts
+          # flutter create does not know about our whisper.cpp CMake target.
+          # Register it so libcall_whisper.so is packaged into the APK.
+          cat >> android/app/build.gradle.kts <<'EOF'
+
+          android {
+              externalNativeBuild {
+                  cmake {
+                      path = file("src/main/cpp/CMakeLists.txt")
+                      version = "3.22.1"
+                  }
+              }
+          }
+          EOF
 
       - name: Resolve Flutter packages
         run: |

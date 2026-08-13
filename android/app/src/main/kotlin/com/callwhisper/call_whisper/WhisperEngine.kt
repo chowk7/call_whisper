@@ -31,7 +31,7 @@ class WhisperEngine(private val progress: (Double, String) -> Unit) {
                 progress(0.90, if (diarize) "발화자 구분 완료" else "전사 결과 정리 중")
                 progress(1.0, "완료")
                 result.success(segments.map { mapOf("startMs" to it.startMs, "endMs" to it.endMs, "speakerId" to it.speakerId, "text" to it.text) })
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 result.error("transcription_failed", e.message ?: "로컬 전사를 완료하지 못했습니다.", null)
             }
         }
